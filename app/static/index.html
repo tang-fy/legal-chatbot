@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>法律智能助手</title>
+    <style>
+        /* 简单的样式，使聊天界面美观 */
+        body { font-family: "Microsoft YaHei", Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        #chat-box { height: 500px; overflow-y: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .message { margin-bottom: 15px; white-space: pre-wrap; }
+        .user { text-align: right; color: #0066cc; }
+        .bot { text-align: left; color: #333; background: #f9f9f9; padding: 10px; border-radius: 5px; }
+        #input-area { margin-top: 15px; display: flex; }
+        #message-input { flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 5px; font-size: 16px; }
+        #send-btn { padding: 12px 25px; margin-left: 10px; background: #0066cc; color: #fff; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h2>法律智能助手</h2>
+    <div id="chat-box"></div>
+    <div id="input-area">
+        <input type="text" id="message-input" placeholder="请输入法律问题或描述事件..." />
+        <button id="send-btn">发送</button>
+    </div>
+    <script>
+        // 生成一个随机的会话 ID，用于区分不同浏览器会话
+        const sessionId = Math.random().toString(36).substring(2);
+        const chatBox = document.getElementById('chat-box');
+        const input = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        // 添加一条消息到聊天框
+        function addMessage(text, sender) {
+            const div = document.createElement('div');
+            div.className = 'message ' + sender;
+            div.textContent = text;
+            chatBox.appendChild(div);
+            chatBox.scrollTop = chatBox.scrollHeight;  // 自动滚动到底部
+        }
+
+        // 发送消息到后端 API
+        async function sendMessage() {
+            const message = input.value.trim();
+            if (!message) return;
+            addMessage('我: ' + message, 'user');
+            input.value = '';
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId, message: message })
+                });
+                const data = await response.json();
+                addMessage('助手:\n' + data.reply, 'bot');
+            } catch (err) {
+                addMessage('错误: ' + err.message, 'bot');
+            }
+        }
+
+        // 绑定发送按钮和回车键事件
+        sendBtn.addEventListener('click', sendMessage);
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+    </script>
+</body>
+</html>
