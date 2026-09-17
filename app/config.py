@@ -20,9 +20,9 @@ MYSQL_DB = os.getenv('MYSQL_DB', "legal_db")
 
 #文档处理与检索参数
 DOCUMENTS_DIR = "./data/documents"  #法律文档存放目录(挂载卷)
-CHUNK_SIZE = 800 #每个文本块的最大字符数
-CHUNK_OVERLAP = 100 #相邻文本块重叠字符数,保证上下文连贯
-RAG_TOP_K = 5 # 检索是会返回的最相关的文档片段数量
+CHUNK_SIZE = 1200 #每个文本块的最大字符数(法律条文通常较长,800太小容易切断法条)
+CHUNK_OVERLAP = 200 #相邻文本块重叠字符数,保证上下文连贯(200/1200≈17%重叠率)
+RAG_TOP_K = 3 # 检索返回的最相关文档片段数量,3条×1200字≈3500tokens,与num_ctx=8192配合避免上下文溢出
 HISTORY_LIMIT = 100 #会话历史保留的消息数量
 
 #嵌入批处理大小

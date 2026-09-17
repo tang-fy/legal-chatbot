@@ -4,9 +4,10 @@ from typing import List, Optional
 
 #定义期望的结构化输出模型
 class LegalAnswerModel(BaseModel):
-    analysis: str = Field(description="对用户问题或事件的详细法律分析")
-    legal_basis: str = Field(description="引用的法律条文、司法解释或案例依据")
-    conclusion: str = Field(description="最终结论,明确回答是否违法或法律后果")
+    behavior_analysis: str = Field(description="对用户行为的法律分析:行为性质(民事/行政/刑事)、是否违法、构成要件")
+    consequences: str = Field(description="法律后果:按情节轻重分情形说明可能承担的民事/行政/刑事责任")
+    advice: str = Field(description="行动建议:如何避免违法或减轻法律责任,给出可执行的具体做法")
+    legal_basis: str = Field(description="引用的1-3条核心法律条文:法律名+条款号+一句话概括")
     disclaimer: str = Field(
         default="本回答仅供参考,不构成正式法律意见.",
         description="免责声明"

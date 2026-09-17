@@ -52,8 +52,12 @@ def load_documents_from_dir(
             continue
         try:
             loader = loader_cls(filepath, **kwargs)
-            raw_docs.extend(loader.load())
-            print(f"[Loader]已加载: {filename}")
+            loaded = loader.load()
+            # 给每个文档加上来源标记(文件名),便于后续检索时引用溯源
+            for doc in loaded:
+                doc.metadata["source"] = filename
+            raw_docs.extend(loaded)
+            print(f"[Loader]已加载: {filename} ({len(loaded)}个文档)")
         except Exception as e:
             print(f"[Loader]加载{filename}失败: {e}")
     if not raw_docs:

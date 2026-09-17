@@ -63,5 +63,8 @@ def chat_endpoint(request: ChatRequest):
     return ChatResponse(reply=answer)
 
 #用于本地直接运行(非Docker环境)
+#注意:不要使用reload=True,Windows+PyCharm下reload会启用子进程模式,
+#导致主进程控制台看不到监听日志且子进程实际可能未成功启动.
+#本地调试直接用PyCharm断点即可,无需reload.
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, workers=1)

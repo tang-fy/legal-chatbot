@@ -90,5 +90,32 @@ def init_vector_store(documents: List[Document] = None) -> Milvus:
 
 
 def similarity_search(query: str, k: int = config.RAG_TOP_K) -> List[Document]:
+    """向量检索,返回最相关的 Top-K 文档.
+
+    优化:
+    1. 多召回 2 倍候选(2*k),再用相似度分数过滤掉不相关的
+    2. 过滤掉分数过低的结果(相关性阈值),避免问房屋租赁却返回香港基本法
+    3. 最终只返回 Top-K
+    """
     store = get_vector_store()
-    return store.similarity_search(query, k=k)
+    # 多召回候选,给过滤留余量
+    candidates = store.similarity_search_with_score(query, k=k * 2)
+    if not candidates:
+        return []
+
+    # 打印分数分布,便于调参
+    scores = [round(score, 4) for _, score in candidates]
+    print(f"[VectorStore] 检索分数分布: min={min(scores)}, max={max(scores)}, mean={sum(scores)/len(scores):.4f}")
+
+    # 过滤掉相关性过低的结果
+    # Milvus similarity_search_with_score 返回的是 L2 距离(越小越相似)
+    # 阈值 1.0: L2 距离 > 1.0 认为不相关
+    threshold = 1.0
+    filtered = [(doc, score) for doc, score in candidates if score <= threshold]
+    if not filtered:
+        print(f"[VectorStore] 所有候选分数均 > {threshold},无相关文档")
+        return []
+    # 最终只取 Top-K
+    filtered = filtered[:k]
+    print(f"[VectorStore] 召回 {len(candidates)} 条,过滤后保留 {len(filtered)} 条")
+    return [doc for doc, _ in filtered]

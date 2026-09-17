@@ -1,8 +1,9 @@
 from datetime import datetime
 import re
+import time
 import requests
 import pandas as pd
-from langchain_classic.utilities import SQLDatabase
+from langchain_community.utilities import SQLDatabase
 from sqlalchemy import create_engine
 from langchain_core.tools import tool
 from .vector_store import similarity_search
@@ -44,7 +45,9 @@ def search_legal_documents(query: str) -> str:
     在本地法律文档库(Milvus)中检索相关内容.
     当用户询问法律问题,需要法律依据时,Agent应调用此工具.
     """
+    t0 = time.time()
     docs = similarity_search(query, k=RAG_TOP_K)
+    print(f"[Timing] search_legal_documents: {time.time()-t0:.2f}s (检索到{len(docs)}条)")
     if not docs:
         return "没有找到相关的法律文档."
     #将所有检索到的片段拼接,并附上标记
@@ -58,6 +61,9 @@ _db_engine= None
 #包装为LangChain的SQLDatabase对象
 _db = None
 
+# 缓存 NL2SQL 专用 LLM 实例,避免每次查询都新建
+_sql_llm = None
+
 def get_db():
     """惰性初始化数据库连接,避免模块导入时就连接MySQL."""
     global _db_engine, _db
@@ -70,6 +76,18 @@ def get_db():
         _db = SQLDatabase(_db_engine)
     return _db
 
+def _get_sql_llm():
+    """惰性初始化 NL2SQL 专用 LLM,复用实例避免重复创建开销."""
+    global _sql_llm
+    if _sql_llm is None:
+        from langchain_ollama import ChatOllama
+        _sql_llm = ChatOllama(
+            model=LLM_MODEL,
+            base_url=OLLAMA_BASE_URL,
+            temperature=0,  # 温度设为0,确保SQL生成稳定
+        )
+    return _sql_llm
+
 @tool
 def query_case_database(question: str) -> str:
     """
@@ -77,21 +95,18 @@ def query_case_database(question: str) -> str:
     内部使用另一个LLM将自然语言问题转换为SQL,然后执行并返回结果.
     """
     from langchain_classic.chains import create_sql_query_chain
-    from langchain_ollama import ChatOllama
     #惰性获取数据库连接(首次调用时才真正连接MySQL)
     db = get_db()
-    #创建专用的SQL生成LLM(温度设为0,确保生成稳定)
-    sql_llm = ChatOllama(
-        model=LLM_MODEL,
-        base_url=OLLAMA_BASE_URL,
-        temperature=0,
-    )
+    #复用缓存的SQL生成LLM实例
+    sql_llm = _get_sql_llm()
     #使用LangChain的SQL查询链
     chain = create_sql_query_chain(sql_llm, db)
     try:
+        t0 = time.time()
         raw_output = chain.invoke({"question": question})
         sql_query = _extract_sql(raw_output) #清洗模型输出,提取可执行SQL
         result = db.run(sql_query) #执行SQL
+        print(f"[Timing] query_case_database: {time.time()-t0:.2f}s")
         return f"生成的SQL:\n{sql_query}\n\n查询结果:\n{result}"
     except Exception as e:
         return f"数据库查询失败: {e}"
