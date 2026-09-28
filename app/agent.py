@@ -9,7 +9,7 @@ from .output_parser import get_format_instructions, output_parser, LegalAnswerMo
 
 from langchain.agents import create_agent
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 
 
 def _parse_legal_answer(output: str) -> Optional[LegalAnswerModel]:
@@ -32,13 +32,13 @@ def _parse_legal_answer(output: str) -> Optional[LegalAnswerModel]:
             pass
     return None
 
-#初始化大语言模型
-llm = ChatOllama(
+#初始化大语言模型:DeepSeek-V3 通过 OpenAI 兼容端点调用
+llm = ChatOpenAI(
     model=config.LLM_MODEL,
-    base_url=config.OLLAMA_BASE_URL,
-    temperature=0.1, #较低的温度保证法律分析的严谨性
-    num_ctx=8192,    #上下文窗口:4096装不下系统提示词+检索片段,会静默截断开头的系统指令导致模型罗列法条
-    num_predict=1024, #限制最大生成token数,避免模型输出过长拖慢速度
+    base_url=config.LLM_BASE_URL,
+    api_key=config.LLM_API_KEY,
+    temperature=0.1,  #较低的温度保证法律分析的严谨性
+    max_tokens=2048,  #最大输出token,V3速度快可给足五段式回答空间
 )
 
 # ========== Fast Path: 直接 RAG 回答 ==========

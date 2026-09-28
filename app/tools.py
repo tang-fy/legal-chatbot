@@ -14,7 +14,8 @@ from .config import (
     MYSQL_PASSWORD,
     MYSQL_DB,
     RAG_TOP_K,
-    OLLAMA_BASE_URL,
+    LLM_BASE_URL,
+    LLM_API_KEY,
     LLM_MODEL
 )
 
@@ -80,10 +81,11 @@ def _get_sql_llm():
     """惰性初始化 NL2SQL 专用 LLM,复用实例避免重复创建开销."""
     global _sql_llm
     if _sql_llm is None:
-        from langchain_ollama import ChatOllama
-        _sql_llm = ChatOllama(
+        from langchain_openai import ChatOpenAI
+        _sql_llm = ChatOpenAI(
             model=LLM_MODEL,
-            base_url=OLLAMA_BASE_URL,
+            base_url=LLM_BASE_URL,
+            api_key=LLM_API_KEY,
             temperature=0,  # 温度设为0,确保SQL生成稳定
         )
     return _sql_llm

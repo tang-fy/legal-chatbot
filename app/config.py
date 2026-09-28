@@ -1,10 +1,15 @@
 import os
 
-#Ollama大模型服务配置
-# 从环境变量读取,如果未设置则使用默认值;Docker中会通过环境变量注入实际地址
+# ===== LLM 配置:DeepSeek API (OpenAI 兼容协议) =====
+# DeepSeek-V3 通过 OpenAI 兼容端点调用,速度远快于本地 7B 模型
+# API Key 从环境变量读取,不要硬编码到代码里(安全 + 方便切换)
+LLM_BASE_URL = os.getenv('LLM_BASE_URL', "https://api.deepseek.com/v1")
+LLM_API_KEY = os.getenv('DEEPSEEK_API_KEY', "")
+LLM_MODEL = os.getenv('LLM_MODEL', "deepseek-chat")  # deepseek-chat 即 V3
+
+# ===== 向量嵌入模型(仍用本地 Ollama,不依赖 API) =====
 OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', "http://localhost:11434")
-EMBED_MODEL = "bge-m3" #用于生成向量的嵌入模型
-LLM_MODEL = "qwen2.5:7b" #用于对话和推理的大语言模型
+EMBED_MODEL = "bge-m3"  # 用于生成向量的嵌入模型
 
 #Milvus向量数据库配置
 MILVUS_HOST = os.getenv('MILVUS_HOST', "milvus")

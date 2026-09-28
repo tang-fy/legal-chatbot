@@ -5,6 +5,7 @@ langchain-core>=1.4.9,<2
 langchain-classic>=1.0.8
 langchain-community==0.4.2
 langchain-ollama>=1.1.0
+langchain-openai>=0.3.0  # DeepSeek API 使用 OpenAI 兼容协议,通过 ChatOpenAI 调用
 langchain-milvus==0.4.0
 langchain-text-splitters
 pymilvus>=3.0.1,<4
