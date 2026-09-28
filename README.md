@@ -200,3 +200,7 @@ curl -X POST http://localhost:8000/chat \
 ## 📄 License
 
 MIT
+
+## 👤 作者
+
+**唐富焱**（[GitHub: tang-fy](https://github.com/tang-fy)）
