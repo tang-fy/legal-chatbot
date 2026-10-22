@@ -27,7 +27,8 @@ MYSQL_DB = os.getenv('MYSQL_DB', "legal_db")
 DOCUMENTS_DIR = "./data/documents"  #法律文档存放目录(挂载卷)
 CHUNK_SIZE = 1200 #每个文本块的最大字符数(法律条文通常较长,800太小容易切断法条)
 CHUNK_OVERLAP = 200 #相邻文本块重叠字符数,保证上下文连贯(200/1200≈17%重叠率)
-RAG_TOP_K = 3 # 检索返回的最相关文档片段数量,3条×1200字≈3500tokens,与num_ctx=8192配合避免上下文溢出
+RAG_TOP_K = int(os.getenv('RAG_TOP_K', "5")) # 检索返回的最相关文档片段数量;条文级切分后 k=5 已能覆盖100%条文召回,且无关文档比k=8更少(27.5% vs 29.9%)
+RAG_SCORE_THRESHOLD = 0.9 # Fast Path 的 L2 距离上限(越小越相似);60题评测中正常问题最小距离≤0.81,非法律问题≥0.95
 HISTORY_LIMIT = 100 #会话历史保留的消息数量
 
 #嵌入批处理大小

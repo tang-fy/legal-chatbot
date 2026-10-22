@@ -135,6 +135,23 @@
             0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
             40% { transform: scale(1); opacity: 1; }
         }
+        /* 流式状态文本(思考中) */
+        .status-text {
+            font-size: 13px;
+            color: #666;
+            margin-right: 8px;
+        }
+        /* 流式打字光标 */
+        .cursor {
+            display: inline-block;
+            width: 8px;
+            height: 1em;
+            background: #1a237e;
+            margin-left: 2px;
+            vertical-align: text-bottom;
+            animation: blink 1s steps(2, start) infinite;
+        }
+        @keyframes blink { to { visibility: hidden; } }
         /* 输入区域 */
         .input-area {
             background: #fff;
@@ -176,6 +193,59 @@
         }
         .send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(26,35,126,0.3); }
         .send-btn:disabled { background: #b0bec5; cursor: not-allowed; transform: none; }
+        /* 分析确认卡片(Human-in-the-Loop) */
+        .confirm-card {
+            max-width: 80% !important;
+            padding: 16px 18px !important;
+            white-space: normal !important;
+        }
+        .confirm-card .confirm-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a237e;
+            margin-bottom: 12px;
+        }
+        .confirm-card .confirm-field {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 10px;
+        }
+        .confirm-card .confirm-field span {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+        .confirm-card .confirm-field input,
+        .confirm-card .confirm-field textarea {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 13px;
+            font-family: inherit;
+            line-height: 1.5;
+            resize: vertical;
+            outline: none;
+        }
+        .confirm-card .confirm-field input:focus,
+        .confirm-card .confirm-field textarea:focus { border-color: #1a237e; }
+        .confirm-card .confirm-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 8px;
+        }
+        .confirm-card .cf-btn {
+            flex: 1;
+            padding: 9px 14px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+        .confirm-card .cf-btn.approve { background: #e8eaf6; color: #1a237e; }
+        .confirm-card .cf-btn.edit { background: linear-gradient(135deg, #1a237e 0%, #283593 100%); color: #fff; }
+        .confirm-card .cf-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(26,35,126,0.3); }
         /* 响应式 */
         @media (max-width: 600px) {
             body { padding: 0; }
@@ -218,14 +288,32 @@
         const input = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
 
-        let isWaiting = false;  // 是否正在等待回复
+        let isWaiting = false;  // 是否正在等待回复(interrupt 期间也保持 true,确认卡片独占交互)
+
+        // ===== 流式渲染状态(sendMessage 和 submitResume 共用) =====
+        let streamBubble = null;   // bot 气泡元素(首 token 到达时创建)
+        let streamedText = '';     // 已流式追加的文本
+        let cursorEl = null;       // 打字光标
+
+        function resetStreamState() {
+            streamBubble = null;
+            streamedText = '';
+            cursorEl = null;
+        }
+
+        // 统一管理等待状态
+        function setWaiting(waiting) {
+            isWaiting = waiting;
+            sendBtn.disabled = waiting;
+            sendBtn.textContent = waiting ? '思考中…' : '发送';
+            input.disabled = waiting;  // interrupt 期间也禁用主输入,防止用户打字发起新 /chat 破坏 thread 状态
+        }
 
         // 添加用户或助手消息
         function addMessage(text, sender) {
             // 移除欢迎消息
             const welcome = document.querySelector('.welcome-msg');
             if (welcome) welcome.remove();
-
             // 移除打字指示器(如果有)
             removeTyping();
 
@@ -246,8 +334,8 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
-        // 显示"正在思考"打字动画
-        function showTyping() {
+        // 显示"正在思考"打字动画,可带状态文本
+        function showTyping(statusText) {
             removeTyping();
             const row = document.createElement('div');
             row.className = 'msg-row bot';
@@ -259,12 +347,23 @@
 
             const bubble = document.createElement('div');
             bubble.className = 'bubble';
-            bubble.innerHTML = '<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+            const status = statusText
+                ? `<span class="status-text">${statusText}</span>`
+                : '';
+            bubble.innerHTML = `<div class="typing-indicator">${status}<div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
 
             row.appendChild(avatar);
             row.appendChild(bubble);
             chatBox.appendChild(row);
             chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        // 更新思考气泡里的状态文本
+        function setTypingStatus(text) {
+            const bubble = document.querySelector('#typing-row .bubble');
+            if (!bubble) return;
+            const status = text ? `<span class="status-text">${text}</span>` : '';
+            bubble.innerHTML = `<div class="typing-indicator">${status}<div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
         }
 
         // 移除打字指示器
@@ -273,7 +372,181 @@
             if (typing) typing.remove();
         }
 
-        // 发送消息
+        function ensureStreamBubble() {
+            if (streamBubble) return;
+            removeTyping();
+            const row = document.createElement('div');
+            row.className = 'msg-row bot';
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = '律';
+            streamBubble = document.createElement('div');
+            streamBubble.className = 'bubble';
+            row.appendChild(avatar);
+            row.appendChild(streamBubble);
+            chatBox.appendChild(row);
+            // 加一个打字光标
+            cursorEl = document.createElement('span');
+            cursorEl.className = 'cursor';
+            streamBubble.appendChild(cursorEl);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function removeCursor() {
+            if (cursorEl && cursorEl.parentNode) cursorEl.parentNode.removeChild(cursorEl);
+            cursorEl = null;
+        }
+
+        function appendToken(text) {
+            ensureStreamBubble();
+            // 在光标前插入文本
+            streamBubble.insertBefore(document.createTextNode(text), cursorEl);
+            streamedText += text;
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        // 打字机渲染最终文本(fast path 未流式 / 或需替换时)
+        async function typewriter(text) {
+            ensureStreamBubble();
+            removeCursor();
+            streamBubble.textContent = '';
+            const delay = Math.max(5, Math.min(20, Math.floor(3000 / Math.max(1, text.length))));
+            for (let i = 0; i < text.length; i++) {
+                streamBubble.textContent += text[i];
+                if (i % 2 === 0) {
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                    await new Promise(r => setTimeout(r, delay));
+                }
+            }
+        }
+
+        // 统一 SSE 事件处理(sendMessage 和 submitResume 共用)
+        async function handleEvent(evt) {
+            if (evt.type === 'status') {
+                // 还没开始流式 token → 更新思考气泡状态文本
+                if (!streamBubble) setTypingStatus(evt.content);
+            } else if (evt.type === 'token') {
+                appendToken(evt.content);
+            } else if (evt.type === 'interrupt') {
+                // 分析确认中断(Human-in-the-Loop):渲染确认卡片,保持锁定等待用户
+                removeCursor();
+                renderConfirmCard(evt.content);
+                // 注意:此处不解锁,用户点确认后 submitResume 会重新设置思考状态
+            } else if (evt.type === 'done') {
+                removeCursor();
+                const finalText = evt.content || '';
+                // 流式文本与最终一致 → 保持已展示内容;否则打字机重渲染
+                if (streamedText !== finalText) {
+                    await typewriter(finalText);
+                }
+                setWaiting(false);
+                input.focus();
+            }
+        }
+
+        // 读取 SSE 流并逐事件处理(sendMessage 和 submitResume 共用)
+        async function pumpSSE(response) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                // 按行拆分,保留最后不完整的行
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed.startsWith('data:')) continue;
+                    const payload = trimmed.slice(5).trim();
+                    if (!payload) continue;
+                    try {
+                        await handleEvent(JSON.parse(payload));
+                    } catch (e) { /* 忽略半包/解析失败 */ }
+                }
+            }
+            // 刷新残留 buffer
+            const rest = buffer.trim();
+            if (rest.startsWith('data:')) {
+                try { await handleEvent(JSON.parse(rest.slice(5).trim())); } catch (e) {}
+            }
+        }
+
+        // 渲染分析确认卡片(Human-in-the-Loop)
+        function renderConfirmCard(c) {
+            removeTyping();
+            const row = document.createElement('div');
+            row.className = 'msg-row bot';
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = '律';
+            const card = document.createElement('div');
+            card.className = 'bubble confirm-card';
+            const kws = (c.search_keywords || []).join(', ');
+            const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            card.innerHTML = `
+                <div class="confirm-title">请确认问题分析(可直接使用或修改后继续):</div>
+                <div class="confirm-field"><span>法律领域</span><input id="cf-domain" type="text" value="${esc(c.legal_domain)}"></div>
+                <div class="confirm-field"><span>问题摘要</span><textarea id="cf-brief" rows="2">${esc(c.brief_analysis)}</textarea></div>
+                <div class="confirm-field"><span>检索关键词(逗号分隔)</span><input id="cf-kws" type="text" value="${esc(kws)}"></div>
+                <div class="confirm-actions">
+                    <button class="cf-btn approve">直接使用</button>
+                    <button class="cf-btn edit">修改后继续</button>
+                </div>
+            `;
+            row.appendChild(avatar);
+            row.appendChild(card);
+            chatBox.appendChild(row);
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            // [直接使用] → approve,[修改后继续] → edit(带修改后的字段)
+            card.querySelector('.approve').addEventListener('click', () => {
+                submitResume({ action: 'approve' });
+            });
+            card.querySelector('.edit').addEventListener('click', () => {
+                submitResume({
+                    action: 'edit',
+                    legal_domain: document.getElementById('cf-domain').value.trim(),
+                    brief_analysis: document.getElementById('cf-brief').value.trim(),
+                    search_keywords: document.getElementById('cf-kws').value
+                        .split(/[,，]/).map(s => s.trim()).filter(Boolean)
+                });
+            });
+        }
+
+        // 提交 resume,恢复被 interrupt 暂停的图并继续流式接收
+        async function submitResume(rv) {
+            // 移除确认卡片
+            const card = document.querySelector('.confirm-card');
+            if (card && card.parentElement) card.parentElement.remove();
+            // 重置流式状态,重新显示思考动画承接后续 token
+            resetStreamState();
+            showTyping();
+            // 保持锁定(setWaiting 已在 sendMessage 时设为 true,这里不重复)
+            try {
+                const resp = await fetch('/resume', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId, resume_value: rv })
+                });
+                if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+                await pumpSSE(resp);
+                // 兜底:若全程未收到 done(异常断开)且无内容,给个提示并解锁
+                if (!streamedText && !streamBubble) {
+                    addMessage('未收到回复,请稍后重试。', 'bot');
+                    setWaiting(false);
+                    input.focus();
+                }
+            } catch (err) {
+                addMessage('请求失败: ' + err.message + '\n\n请检查后端服务是否正常运行。', 'bot');
+                setWaiting(false);
+                input.focus();
+            }
+            // 正常情况下 done 事件在 handleEvent 里解锁,这里不重复解锁
+        }
+
+        // 发送消息(SSE 流式)
         async function sendMessage() {
             if (isWaiting) return;  // 防止重复发送
             const message = input.value.trim();
@@ -285,28 +558,30 @@
             autoResize();  // 重置输入框高度
 
             // 锁定状态,显示思考中
-            isWaiting = true;
-            sendBtn.disabled = true;
-            sendBtn.textContent = '思考中…';
+            setWaiting(true);
             showTyping();
+            resetStreamState();
 
             try {
-                const response = await fetch('/chat', {
+                const resp = await fetch('/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ session_id: sessionId, message: message })
                 });
-                const data = await response.json();
-                addMessage(data.reply, 'bot');
+                if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+                await pumpSSE(resp);
+                // 兜底:若全程未收到 done(异常断开)且无内容、也没出确认卡片,给个提示并解锁
+                if (!streamedText && !streamBubble && !document.querySelector('.confirm-card')) {
+                    addMessage('未收到回复,请稍后重试。', 'bot');
+                    setWaiting(false);
+                    input.focus();
+                }
             } catch (err) {
                 addMessage('请求失败: ' + err.message + '\n\n请检查后端服务是否正常运行。', 'bot');
-            } finally {
-                // 解锁状态
-                isWaiting = false;
-                sendBtn.disabled = false;
-                sendBtn.textContent = '发送';
+                setWaiting(false);
                 input.focus();
             }
+            // 正常情况:done 事件在 handleEvent 解锁;interrupt 事件保持锁定等用户点确认
         }
 
         // textarea 自适应高度

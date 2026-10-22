@@ -1,19 +1,21 @@
-from datetime import datetime
+"""SQL 工具函数:数据库连接、NL2SQL 模型与 SQL 清洗.
+
+LangGraph 改造后,检索和 SQL 查询已分别由 research / sql_node 直接调用,
+这里只保留被节点复用的底层函数(get_db / _get_sql_llm / _extract_sql),
+不再提供 @tool 包装(原 ReAct 架构遗留的 search_legal_documents、
+query_case_database、all_tools 已删除).
+"""
 import re
-import time
-import requests
-import pandas as pd
+
 from langchain_community.utilities import SQLDatabase
 from sqlalchemy import create_engine
-from langchain_core.tools import tool
-from .vector_store import similarity_search
+
 from .config import (
     MYSQL_HOST,
     MYSQL_PORT,
     MYSQL_USER,
     MYSQL_PASSWORD,
     MYSQL_DB,
-    RAG_TOP_K,
     LLM_BASE_URL,
     LLM_API_KEY,
     LLM_MODEL
@@ -39,31 +41,16 @@ def _extract_sql(text: str) -> str:
     sql = sql.split("\n\n")[0].strip()
     return sql.rstrip(";").strip()
 
-#工具1:法律文档检索(核心RAG工具)
-@tool
-def search_legal_documents(query: str) -> str:
-    """
-    在本地法律文档库(Milvus)中检索相关内容.
-    当用户询问法律问题,需要法律依据时,Agent应调用此工具.
-    """
-    t0 = time.time()
-    docs = similarity_search(query, k=RAG_TOP_K)
-    print(f"[Timing] search_legal_documents: {time.time()-t0:.2f}s (检索到{len(docs)}条)")
-    if not docs:
-        return "没有找到相关的法律文档."
-    #将所有检索到的片段拼接,并附上标记
-    context = "\n\n".join([f"[文档片段]\n{doc.page_content}" for doc in docs])
-    return context
 
-#工具2:案例数据库查询
-#创建SQLAlchemy引擎(连接MySQL)
-_db_engine= None
+# 创建SQLAlchemy引擎(连接MySQL)
+_db_engine = None
 
-#包装为LangChain的SQLDatabase对象
+# 包装为LangChain的SQLDatabase对象
 _db = None
 
 # 缓存 NL2SQL 专用 LLM 实例,避免每次查询都新建
 _sql_llm = None
+
 
 def get_db():
     """惰性初始化数据库连接,避免模块导入时就连接MySQL."""
@@ -77,6 +64,7 @@ def get_db():
         _db = SQLDatabase(_db_engine)
     return _db
 
+
 def _get_sql_llm():
     """惰性初始化 NL2SQL 专用 LLM,复用实例避免重复创建开销."""
     global _sql_llm
@@ -89,32 +77,3 @@ def _get_sql_llm():
             temperature=0,  # 温度设为0,确保SQL生成稳定
         )
     return _sql_llm
-
-@tool
-def query_case_database(question: str) -> str:
-    """
-    查询MySQL中的法律案例数据库.
-    内部使用另一个LLM将自然语言问题转换为SQL,然后执行并返回结果.
-    """
-    from langchain_classic.chains import create_sql_query_chain
-    #惰性获取数据库连接(首次调用时才真正连接MySQL)
-    db = get_db()
-    #复用缓存的SQL生成LLM实例
-    sql_llm = _get_sql_llm()
-    #使用LangChain的SQL查询链
-    chain = create_sql_query_chain(sql_llm, db)
-    try:
-        t0 = time.time()
-        raw_output = chain.invoke({"question": question})
-        sql_query = _extract_sql(raw_output) #清洗模型输出,提取可执行SQL
-        result = db.run(sql_query) #执行SQL
-        print(f"[Timing] query_case_database: {time.time()-t0:.2f}s")
-        return f"生成的SQL:\n{sql_query}\n\n查询结果:\n{result}"
-    except Exception as e:
-        return f"数据库查询失败: {e}"
-
-#所有工具列表,将传递给Agent
-all_tools = [
-    search_legal_documents,
-    query_case_database
-]

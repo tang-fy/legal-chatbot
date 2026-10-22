@@ -1,3 +1,4 @@
+import os
 import time
 from langchain_milvus import Milvus
 from pymilvus import MilvusClient
@@ -70,11 +71,64 @@ def _collection_has_data() -> bool:
         client.close()
 
 
-def init_vector_store(documents: List[Document] = None) -> Milvus:
-    store = get_vector_store()
+def _drop_collection() -> None:
+    """删除整个 collection,用于切分策略变更后的重建索引."""
+    client = MilvusClient(uri=f"http://{config.MILVUS_HOST}:{config.MILVUS_PORT}")
+    try:
+        if client.has_collection(config.MILVUS_COLLECTION):
+            client.drop_collection(config.MILVUS_COLLECTION)
+            print(f"[VectorStore] 已删除旧 collection '{config.MILVUS_COLLECTION}'")
+    finally:
+        client.close()
 
+
+def query_by_article(articles: List[str]) -> List[Document]:
+    """按条文号精确回查 collection,用于答案中的法条引用核验.
+
+    走 metadata 过滤而非向量检索,不受相似度排名影响,查到的就是原文.
+    """
+    if not articles:
+        return []
+    client = MilvusClient(uri=f"http://{config.MILVUS_HOST}:{config.MILVUS_PORT}")
+    try:
+        expr = "article in [" + ",".join(f'"{a}"' for a in articles) + "]"
+        rows = client.query(
+            config.MILVUS_COLLECTION,
+            filter=expr,
+            output_fields=["source", "article", "text"],
+            limit=200,
+        )
+        return [
+            Document(
+                page_content=row.get("text", ""),
+                metadata={
+                    "source": row.get("source", ""),
+                    "article": row.get("article", ""),
+                },
+            )
+            for row in rows
+        ]
+    except Exception as e:
+        print(f"[VectorStore] 条文回查失败: {e}")
+        return []
+    finally:
+        client.close()
+
+
+
+def init_vector_store(
+    documents: List[Document] = None, force_rebuild: bool = False
+) -> Milvus:
     if not documents:
-        return store
+        return get_vector_store()
+
+    # 切分策略变更后需要重建;可通过参数或 REBUILD_VECTOR_STORE=1 触发
+    if force_rebuild or os.getenv("REBUILD_VECTOR_STORE") == "1":
+        global _vector_store
+        _vector_store = None
+        _drop_collection()
+
+    store = get_vector_store()
 
     if _collection_has_data():
         print("[VectorStore] Collection 已有数据，跳过插入")
@@ -89,13 +143,55 @@ def init_vector_store(documents: List[Document] = None) -> Milvus:
     return store
 
 
-def similarity_search(query: str, k: int = config.RAG_TOP_K) -> List[Document]:
+def similarity_search_multi(
+    queries: List[str], k: int = config.RAG_TOP_K, threshold: float = 1.0
+) -> List[Document]:
+    """多查询检索:每个关键词独立召回,按 L2 距离合并去重后返回全局 Top-K.
+
+    适用场景:analysis 节点产出多个检索关键词(如"交通肇事罪, 逃逸, 量刑"),
+    若只用第一个关键词会漏召回.同一 chunk 被多个关键词命中时只保留距离最小的.
+    threshold 为 L2 距离上限(越小越相似),评测时传大值可关闭过滤.
+    """
+    store = get_vector_store()
+
+    # 清洗空关键词并去重(保持原顺序)
+    queries = list(dict.fromkeys(q.strip() for q in (queries or []) if q and q.strip()))
+    if not queries:
+        return []
+
+    # 合并候选:key 用"来源+内容",避免同一 chunk 重复进入结果
+    best: dict[str, tuple[Document, float]] = {}
+    for q in queries:
+        for doc, score in store.similarity_search_with_score(q, k=k * 2):
+            key = f"{doc.metadata.get('source', '')}::{doc.page_content}"
+            if key not in best or score < best[key][1]:
+                best[key] = (doc, score)
+
+    # 按 L2 距离全局排序(越小越相似)
+    ranked = sorted(best.values(), key=lambda pair: pair[1])
+    scores = [round(score, 4) for _, score in ranked]
+    print(
+        f"[VectorStore] 多查询检索({len(queries)} 个关键词): 候选 {len(ranked)} 条, "
+        f"分数 min={min(scores)}, max={max(scores)}, mean={sum(scores)/len(scores):.4f}"
+    )
+
+    # 与 similarity_search 使用同一阈值策略
+    filtered = [(doc, score) for doc, score in ranked if score <= threshold][:k]
+    print(f"[VectorStore] 多查询过滤(阈值 {threshold})后保留 {len(filtered)} 条")
+    return [doc for doc, _ in filtered]
+
+
+def similarity_search(
+    query: str, k: int = config.RAG_TOP_K, threshold: float = 1.0
+) -> List[Document]:
     """向量检索,返回最相关的 Top-K 文档.
 
     优化:
     1. 多召回 2 倍候选(2*k),再用相似度分数过滤掉不相关的
     2. 过滤掉分数过低的结果(相关性阈值),避免问房屋租赁却返回香港基本法
     3. 最终只返回 Top-K
+
+    threshold 为 L2 距离上限(越小越相似),评测时传大值可关闭过滤.
     """
     store = get_vector_store()
     # 多召回候选,给过滤留余量
@@ -109,8 +205,7 @@ def similarity_search(query: str, k: int = config.RAG_TOP_K) -> List[Document]:
 
     # 过滤掉相关性过低的结果
     # Milvus similarity_search_with_score 返回的是 L2 距离(越小越相似)
-    # 阈值 1.0: L2 距离 > 1.0 认为不相关
-    threshold = 1.0
+    # 默认阈值 1.0: L2 距离 > 1.0 认为不相关
     filtered = [(doc, score) for doc, score in candidates if score <= threshold]
     if not filtered:
         print(f"[VectorStore] 所有候选分数均 > {threshold},无相关文档")
