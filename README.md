@@ -281,10 +281,10 @@ curl -N -X POST http://localhost:8000/resume \
 评测代码在 `eval/`，结果产物在 `eval/out/`。分为三层，互不影响：
 
 ```bash
-# 主集（60 题，默认读取 eval/questions.jsonl）
+# 主集（60 题，默认读取 eval/questions.jsonl；RAG_TOP_K=5 正式口径，输出 k5_ 前缀）
 python eval/run_eval.py --suite route
 python eval/run_eval.py --suite retrieval --ks 3 5 8 --thresholds 0.8 1.0
-python eval/run_eval.py --suite e2e
+python eval/run_eval.py --suite e2e --prefix k5_
 
 # holdout（50 题，不参与调参；--prefix 避免覆盖主集结果）
 python eval/run_eval.py --suite route --questions eval/holdout.jsonl --prefix holdout_
@@ -311,6 +311,8 @@ python eval/run_eval.py --suite e2e --limit 5
 | 对抗集 | 25 | 100.0% | 100.0% | 3.3% | 88.0% | — | 1.00 | 4.23s / 5.00s |
 
 未落地率指答案引用中无法在语料库定位到原文的比例；holdout 与对抗集高于主集，说明换问法后检索漏召回更明显，主集 100% gold 召回是调参后的过拟合信号。
+
+> 数据来源：主集以 `eval/out/k5_e2e_summary.md`（`RAG_TOP_K=5` 正式跑）为准，holdout 以 `eval/out/holdout_e2e_summary.md`（50 题）为准。`eval/out/archive/` 仅保留早期参数与旧题集的历史产物，请勿引用其中的数字。
 
 主集平均 LLM 调用 **1.42 次**；普通咨询走 Fast Path 时固定 1 次，只有案例统计类问题进入 Agent 多节点链路。
 
