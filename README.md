@@ -19,7 +19,7 @@
   - **Agent 分支**：案例检索/统计类问题 → analysis→{sql_node, research}→synthesis 并行处理
 - **条文级 RAG**：按“第 X 条”切分 59 部法律为 7912 个片段，metadata 记录法律名与条文号；BGE-M3 向量化 + Milvus 检索，L2 阈值 0.9、Top-5，低于阈值直接拒答，不做无关硬答
 - **引用核验**：答案生成后抽取《法律名》第 X 条，按 metadata 精确回查语料库，未命中引用单独记录；主集引用未落地率由 24.6% 降至 0.8%
-- **三层评测体系**：60 题主集 + 20 题 holdout（不参与调参），覆盖路由、检索参数与端到端；指标含路由准确率、条文级 recall@K、引用未落地率、gold 引用召回、P50/P95、LLM 调用数与正确拒答率
+- **三层评测体系**：60 题主集 + 50 题 holdout + 25 题对抗集（后两者不参与调参），覆盖路由、检索参数与端到端；指标含路由准确率、条文级 recall@K、引用未落地率、gold 引用召回、P50/P95、LLM 调用数与正确拒答率
 - **NL2SQL 案例查询**：自然语言直接查询结构化案例库，自动清洗 LLM 生成 SQL 中的 Markdown 包裹
 - **稳定的结构化输出**：PydanticOutputParser 约束 JSON Schema，解析失败自动降级兜底，服务不中断
 - **现代化 Web 界面**：气泡式对话框、思考中加载动画、流式打字光标、HITL 确认卡片、多轮会话、Enter 发送 / Shift+Enter 换行
@@ -128,7 +128,7 @@ legal-chatbot/
 │   │   ├── parse.py        # JSON 解析/透传,写回 messages
 │   │   └── fallback.py     # 解析失败降级兜底
 │   └── static/index.html   # 前端聊天界面(SSE + 打字机 + HITL 卡片)
-├── eval/                   # 评测脚本、60 题主集 + 20 题 holdout、评测产物
+├── eval/                   # 评测脚本、60 题主集 + 50 题 holdout + 25 题对抗集、评测产物
 ├── data/documents/         # 59 部现行法律 docx(随仓库分发)
 ├── init.sql                # MySQL 案例库建表脚本
 ├── docker-compose.yml      # etcd/minio/milvus/mysql/ollama 编排
@@ -281,27 +281,36 @@ curl -N -X POST http://localhost:8000/resume \
 评测代码在 `eval/`，结果产物在 `eval/out/`。分为三层，互不影响：
 
 ```bash
-# 路由评测（零 LLM 成本）
+# 主集（60 题，默认读取 eval/questions.jsonl）
 python eval/run_eval.py --suite route
-
-# 检索参数网格（只消耗 embedding）
 python eval/run_eval.py --suite retrieval --ks 3 5 8 --thresholds 0.8 1.0
-
-# 端到端（真实跑图，需要 DeepSeek Key + Milvus）
 python eval/run_eval.py --suite e2e
 
-# 20 题 holdout（不参与调参，结果加 holdout_ 前缀，不覆盖主集）
+# holdout（50 题，不参与调参；--prefix 避免覆盖主集结果）
+python eval/run_eval.py --suite route --questions eval/holdout.jsonl --prefix holdout_
 python eval/run_eval.py --suite e2e --questions eval/holdout.jsonl --prefix holdout_
+
+# 对抗集（25 题：多法条竞合、时效、口语化长问题）
+python eval/run_eval.py --suite route --questions eval/adversarial.jsonl --prefix adversarial_
+python eval/run_eval.py --suite e2e --questions eval/adversarial.jsonl --prefix adversarial_
+
+# 冒烟测试：只跑前 5 题
+python eval/run_eval.py --suite e2e --limit 5
 ```
 
-### 主集与 holdout
+- `route` 与 `retrieval` 不调用大模型，无需配置 `DEEPSEEK_API_KEY`；`e2e` 需要 Key + Milvus。
+- `--questions` 切换题集，`--prefix` 决定输出文件名前缀（如 `holdout_e2e_summary.md`）。
+- `--ks` / `--thresholds` 仅对 `retrieval` 生效，不传时用脚本默认值。
 
-| 数据集 | 题数 | 路由准确率 | 要点命中 | 引用未落地率 | gold 引用召回 | 正确拒答 | P50 / P95 |
-|---|---|---|---|---|---|---|---|
-| 主集 | 60 | 100.0% | 100.0% | 0.8% | 97.5% | 100.0% | 3.83s / 4.95s |
-| holdout | 20 | 100.0% | 100.0% | 6.9%* | 81.8% | 100.0% | 3.68s / 4.51s |
+### 主集、holdout 与对抗集
 
-\* holdout 的 6.9% 来自两部未收录进语料库的法律（《治安管理处罚法》《噪声污染防治法》），不是检索或生成逻辑缺陷。
+| 数据集 | 题数 | 路由准确率 | 要点命中 | 引用未落地率 | gold 引用召回 | 正确拒答 | 平均 LLM 调用 | P50 / P95 |
+|---|---|---|---|---|---|---|---|---|
+| 主集（调参） | 60 | 100.0% | 97.3% | 0.8% | 100.0% | 100.0% | 1.42 | 4.17s / 5.04s |
+| holdout | 50 | 96.0% | 95.0% | 3.2% | 77.1% | 90.0% | 1.30 | 3.74s / 5.32s |
+| 对抗集 | 25 | 100.0% | 100.0% | 3.3% | 88.0% | — | 1.00 | 4.23s / 5.00s |
+
+未落地率指答案引用中无法在语料库定位到原文的比例；holdout 与对抗集高于主集，说明换问法后检索漏召回更明显，主集 100% gold 召回是调参后的过拟合信号。
 
 主集平均 LLM 调用 **1.42 次**；普通咨询走 Fast Path 时固定 1 次，只有案例统计类问题进入 Agent 多节点链路。
 
